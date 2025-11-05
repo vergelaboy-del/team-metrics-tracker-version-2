@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Team Metrics Tracker</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <style>
+    body { font-family: 'Segoe UI', Tahoma, sans-serif; background:#f4f6f8; margin:40px; color:#333; }
+    h2 { color:#004080; border-bottom:2px solid #004080; padding-bottom:5px; margin-top:30px; }
+    .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+    .card { background:#fff; border:1px solid #e5e7eb; border-radius:8px; padding:16px; box-shadow:0 2px 5px rgba(0,0,0,0.06); margin-bottom:20px; }
+    label { font-weight:600; color:#1f2937; margin-right:6px; }
+    input, button { padding:8px 10px; border-radius:6px; border:1px solid #cbd5e1; }
+    input[type="number"] { width:100px; }
+    input[type="date"] { width:160px; }
+    input[type="text"] { width:220px; }
+    button { background:#004080; color:#fff; border:none; cursor:pointer; }
+    button:hover { background:#003060; }
+    table { border-collapse:collapse; width:100%; background:#fff; box-shadow:0 2px 5px rgba(0,0,0,0.06); }
+    th, td { border:1px solid #e5e7eb; padding:10px; text-align:center; }
+    th { background:#004080; color:#fff; font-weight:600; }
+    .agent-tabs { margin-top:10px; }
+    .agent-tabs button { background:#e0e7ff; color:#0f172a; border:1px solid #004080; margin:6px 6px 0 0; }
+    .agent-tabs button.active, .agent-tabs button:hover { background:#c7d2fe; }
+    .muted { color:#6b7280; font-size:12px; }
+    .controls { display:flex; gap:10px; flex-wrap:wrap; }
+  </style>
+</head>
+<body>
+
+  <!-- WEEKLY SUMMARY -->
+  <div class="card">
+    <h2>Weekly team metrics tracker (current agent)</h2>
+    <div class="muted">Weekly totals update as you save or edit daily records for the selected agent.</div>
+    <table>
+      <thead>
+        <tr>
+          <th>Week start</th>
+          <th>Ticket count</th>
+          <th>Live chat count</th>
+          <th>Hanging tickets</th>
+          <th>Notes</th>
+        </tr>
+      </thead>
+      <tbody id="weeklyBody"></tbody>
+    </table>
+  </div>
+
+  <!-- DAILY ONE-LINE ENTRY -->
+  <div class="card">
+    <h2>Enter daily report</h2>
+    <div class="row">
+      <div>
+        <label for="daySelect">Date</label>
+        <input type="date" id="daySelect">
+      </div>
+      <div>
+        <label for="ticketInput">Tickets</label>
+        <input type="number" id="ticketInput" placeholder="0">
+      </div>
+      <div>
+        <label for="chatInput">Live chat</label>
+        <input type="number" id="chatInput" placeholder="0">
+      </div>
+      <div>
+        <label for="hangInput">Hanging</label>
+        <input type="number" id="hangInput" placeholder="0">
+      </div>
+      <div>
+        <label for="noteInput">Notes</label>
+        <input type="text" id="noteInput" placeholder="Optional">
+      </div>
+      <div class="controls">
+        <button id="saveBtn">💾 Save</button>
+        <button id="prevDayBtn" type="button">◀ Previous day</button>
+        <button id="nextDayBtn" type="button">Next day ▶</button>
+      </div>
+    </div>
+    <div class="muted">Tip: Use the date selector or the previous/next buttons to move across days.</div>
+  </div>
+
+  <!-- DAILY RECORDS TABLE -->
+  <div class="card">
+    <h2>Daily records</h2>
+    <div class="controls">
+      <button id="exportBtn" type="button">📤 Export current agent view to Excel</button>
+      <button id="clearAgentBtn" type="button" style="background:#991b1b;">🧹 Clear current agent data</button>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Tickets</th>
+          <th>Live chat</th>
+          <th>Hanging</th>
+          <th>Notes</th>
+        </tr>
+      </thead>
+      <tbody id="dailyRecords"></tbody>
+    </table>
+  </div>
+
+  <!-- AGENT SELECTOR -->
+  <div class="card">
+    <h2>Agents</h2>
+    <div class="agent-tabs" id="agentTabs"></div>
+    <div class="muted">Select an agent to view and edit their records. Saving applies to the selected agent.</div>
+  </div>
+
+<script>
+  // Config
+  const startDate = new Date("2025-10-29");
+  const agents = [
+    "Vergel Aboy", "Liandro Gonzales", "Frodel Jamito",
+    "George Tolin", "Lyndon Jake Cataruja",
+    "Jefferson Alforque", "Patrick Ballesteros"
+  ];
+
+  // State
+  let currentAgent = agents[0];
+
+  // Elements
+  const weeklyBody    = document.getElementById("weeklyBody");
+  const dailyRecords  = document.getElementById("dailyRecords");
+  const agentTabs     = document.getElementById("agentTabs");
+
+  const daySelect   = document.getElementById("daySelect");
+  const ticketInput = document.getElementById("ticketInput");
+  const chatInput   = document.getElementById("chatInput");
+  const hangInput   = document.getElementById("hangInput");
+  const noteInput   = document.getElementById("noteInput");
+
+  const saveBtn       = document.getElementById("saveBtn");
+  const prevDayBtn    = document.getElementById("prevDayBtn");
+  const nextDayBtn    = document.getElementById("nextDayBtn");
+  const exportBtn     = document.getElementById("exportBtn");
+  const clearAgentBtn = document.getElementById("clearAgentBtn");
+
+  // Storage helpers
+  function dayKey(agent, date){ return `${agent}_dates`; }
+  function recordKey(agent, date, field){ return `${agent}_${date}_${field}`; }
+
+  function getAgentDates(agent){
+    const raw = localStorage.getItem(dayKey(agent));
+    return raw ? JSON.parse(raw) : [];
+  }
+  function setAgentDates(agent, dates){
+    localStorage.setItem(dayKey(agent), JSON.stringify(dates));
+  }
+  function loadField(agent, date, field){
+    return localStorage.getItem(recordKey(agent, date, field)) || "";
+  }
+  function saveField(agent, date, field, value){
+    localStorage.setItem(recordKey(agent, date, field), value);
+  }
+
+  // Rendering: Agent tabs
+  function renderAgentTabs(){
+    agentTabs.innerHTML = "";
+    agents.forEach(name => {
+      const btn = document.createElement("button");
+      btn.textContent = name;
+      btn.className = "agent-btn";
+      if (name === currentAgent) btn.classList.add("active");
+      btn.addEventListener("click", () => {
+        document.querySelectorAll("#agentTabs button").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        currentAgent = name;
+        renderDailyRecords();
+        updateWeekly();
+        ensureDaySelected();
+        loadDayIntoForm(daySelect.value);
+      });
+      agentTabs.appendChild(btn);
+    });
+  }
+
+  // Rendering: Daily records table
+  function renderDailyRecords(){
+    const dates = getAgentDates(currentAgent).sort();
+    dailyRecords.innerHTML = "";
+    dates.forEach(dateStr => {
+      const row = document.createElement("tr");
+      const tickets = loadField(currentAgent, dateStr, "ticket") || 0;
+      const chat    = loadField(currentAgent, dateStr, "chat") || 0;
+      const hang    = loadField(currentAgent, dateStr, "hang") || 0;
+      const note    = loadField(currentAgent, dateStr, "note") || "";
+
+      row.innerHTML = `
+        <td>${dateStr}</td>
+        <td><input type="number" value="${tickets}"></td>
+        <td><input type="number" value="${chat}"></td>
+        <td><input type="number" value="${hang}"></td>
+        <td><input type="text" value="${note}"></td>
+      `;
+      const inputs = row.querySelectorAll("input");
+      const fields = ["ticket", "chat", "hang", "note"];
+      inputs.forEach((inp, i) => {
+        inp.addEventListener("change", () => {
+          saveField(currentAgent, dateStr, fields[i], inp.value);
+          updateWeekly();
+          // If editing the currently selected date, reflect changes in the form
+          if (daySelect.value === dateStr) {
+            loadDayIntoForm(dateStr);
+          }
+        });
+      });
+      dailyRecords.appendChild(row);
+    });
+  }
+
+  // Weekly aggregation
+  function updateWeekly(){
+    const dates = getAgentDates(currentAgent);
+    const weeklyTotals = {}; // weekKey -> tickets sum
+
+    dates.forEach(dateStr => {
+      const date = new Date(dateStr);
+      const weekIndex = Math.floor((date - startDate) / (7 * 24 * 60 * 60 * 1000));
+      const weekStart = new Date(startDate);
+      weekStart.setDate(startDate.getDate() + weekIndex * 7);
+      const weekKey = weekStart.toISOString().split("T")[0];
+
+      const tickets = parseInt(loadField(currentAgent, dateStr, "ticket") || "0", 10);
+      weeklyTotals[weekKey] = (weeklyTotals[weekKey] || 0) + tickets;
+    });
+
+    weeklyBody.innerHTML = "";
+    Object.keys(weeklyTotals).sort().forEach(weekKey => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${weekKey}</td>
+        <td>${weeklyTotals[weekKey]}</td>
+        <td>0</td>
+        <td>0</td>
+        <td></td>
+      `;
+      weeklyBody.appendChild(tr);
+    });
+  }
+
+  // One-line form: load current agent + date into inputs
+  function loadDayIntoForm(dateStr){
+    ticketInput.value = loadField(currentAgent, dateStr, "ticket") || 0;
+    chatInput.value   = loadField(currentAgent, dateStr, "chat") || 0;
+    hangInput.value   = loadField(currentAgent, dateStr, "hang") || 0;
+    noteInput.value   = loadField(currentAgent, dateStr, "note") || "";
+  }
+
+  // Ensure a date is selected in the form (defaults to startDate or last used date)
+  function ensureDaySelected(){
+    const dates = getAgentDates(currentAgent).sort();
+    if (!daySelect.value) {
+      if (dates.length > 0) {
+        daySelect.value = dates[dates.length - 1];
+      } else {
+        daySelect.value = startDate.toISOString().split("T")[0];
+      }
+    }
+  }
+
+  // Save from one-line form
+  saveBtn.addEventListener("click", () => {
+    const dateStr = daySelect.value;
+    if (!dateStr) return;
+
+    let dates = getAgentDates(currentAgent);
+    if (!dates.includes(dateStr)) {
+      dates.push(dateStr);
+      setAgentDates(currentAgent, dates);
+    }
+
+    saveField(currentAgent, dateStr, "ticket", ticketInput.value || "0");
+    saveField(currentAgent, dateStr, "chat",   chatInput.value   || "0");
+    saveField(currentAgent, dateStr, "hang",   hangInput.value   || "0");
+    saveField(currentAgent, dateStr, "note",   noteInput.value   || "");
+
+    renderDailyRecords();
+    updateWeekly();
+  });
+
+  // Date picker change -> load values into form
+  daySelect.addEventListener("change", () => {
+    if (daySelect.value) {
+      loadDayIntoForm(daySelect.value);
+    }
+  });
+
+  // Previous/Next day navigation
+  prevDayBtn.addEventListener("click", () => {
+    if (!daySelect.value) return;
+    const d = new Date(daySelect.value);
+    d.setDate(d.getDate() - 1);
+    daySelect.value = d.toISOString().split("T")[0];
+    loadDayIntoForm(daySelect.value);
+  });
+
+  nextDayBtn.addEventListener("click", () => {
+    if (!daySelect.value) return;
+    const d = new Date(daySelect.value);
+    d.setDate(d.getDate() + 1);
+    daySelect.value = d.toISOString().split("T")[0];
+    loadDayIntoForm(daySelect.value);
+  });
+
+  // Export current agent view to Excel
+  exportBtn.addEventListener("click", () => {
+    const rows = Array.from(dailyRecords.querySelectorAll("tr"));
+    const data = [["Date", "Tickets", "Live chat", "Hanging", "Notes"]];
+    rows.forEach(r => {
+      data.push([
+        r.children[0].textContent,
+        r.children[1].querySelector("input").value,
+        r.children[2].querySelector("input").value,
+        r.children[3].querySelector("input").value,
+        r.children[4].querySelector("input").value
+      ]);
+    });
+    const ws = XLSX.utils.aoa_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Daily Records");
+    XLSX.writeFile(wb, `TeamMetrics_${currentAgent}.xlsx`);
+  });
+
+  // Clear current agent data
+  clearAgentBtn.addEventListener("click", () => {
+    if (!confirm(`This will clear all saved records for ${currentAgent}. Continue?`)) return;
+    const dates = getAgentDates(currentAgent);
+    dates.forEach(dateStr => {
+      ["ticket","chat","hang","note"].forEach(field => {
+        localStorage.removeItem(recordKey(currentAgent, dateStr, field));
+      });
+    });
+    setAgentDates(currentAgent, []);
+    renderDailyRecords();
+    updateWeekly();
+    // Reset form values
+    ensureDaySelected();
+    loadDayIntoForm(daySelect.value);
+  });
+
+  // Initial render
+  renderAgentTabs();
+  ensureDaySelected();
+  loadDayIntoForm(daySelect.value);
+  renderDailyRecords();
+  updateWeekly();
+</script>
+</body>
+</html>
